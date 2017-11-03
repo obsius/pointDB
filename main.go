@@ -5,7 +5,7 @@ import (
 	"math/rand"
 	"time"
 
-	"./sectors"
+	"github.com/pointDB/sectors"
 )
 
 const _x uint8 = 0
@@ -17,11 +17,11 @@ func main() {
 
 	// inserts
 	start := time.Now()
-	
+
 	for i := uint32(0); i < 200000; i++ {
 		root.Append(&sectors.Point{
-			ID: i,
-			Coord: [2]uint32{ rand.Uint32(), rand.Uint32() },
+			ID:    i,
+			Coord: [2]uint32{rand.Uint32(), rand.Uint32()},
 		})
 	}
 
@@ -36,9 +36,9 @@ func main() {
 	var buf sectors.TileMatrix
 	for i := 0; i < 1; i++ {
 		buf = root.FindInSector(sectors.Query{
-			TopLeft: sectors.Coord{0, 0},
+			TopLeft:     sectors.Coord{0, 0},
 			BottomRight: sectors.Coord{uintSize / 1, uintSize / 1},
-			Level: 31,
+			Level:       31,
 		})
 	}
 

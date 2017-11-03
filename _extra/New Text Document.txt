@@ -1,0 +1,446 @@
+package main
+
+import (
+	"fmt"
+	"math"
+	"math/rand"
+	"time"
+	"sync"
+)
+
+var mutex = &sync.Mutex{}
+
+const _x uint8 = 0
+const _y uint8 = 1
+
+const numTrials = 10
+
+type Point struct {
+	Coord [2]uint32
+}
+
+type Node struct {
+	val uint32
+	data interface{}
+}
+
+type PointDB struct {
+	root *MasterSector
+}
+
+type dd struct {
+	lowerX uint32
+	upperX uint32
+	lowerY uint32
+	upperY uint32
+	master *MasterSector
+}
+
+type MasterSector struct {
+	points []*Node
+
+	size int
+	splitAt int
+
+	x uint32
+	y uint32
+	hX uint32
+	lX uint32
+	width uint32
+
+	level uint8
+
+	split bool
+
+	subSectors [2][2]*MasterSector
+}
+
+type Sector struct {
+	x uint32
+	y uint32
+
+	Count uint32
+}
+
+func binarySearch(nodes []*Node, val uint32) (uint32, bool) {
+
+	length := len(nodes)
+
+	if length == 0 { return 0, false }
+
+	count := int(math.Ceil(math.Log2(float64(length))))
+	cc := 0
+
+	found := false
+
+	var i int = len(nodes) / 2
+	var c float64;
+	for c = float64(float64(length) / 4); cc <= count; c = c / 2 {
+
+		if (i < 0) { i = 0 }
+		if (i > length - 1) { i = length - 1 }
+
+		if val > nodes[i].val {
+			i = i + int(math.Ceil(c))
+		} else if val < nodes[i].val && c >= .5  {
+			i = i - int(math.Ceil(c))
+		} else if (val == nodes[i].val) {
+			found = true
+			break
+		} else {
+			break
+		}
+		cc++
+	}
+
+	return uint32(i), found
+}
+
+func insertNode(arr []*Node, i uint32, val *Node) []*Node {
+
+	arr = append(arr, &Node{})
+	copy(arr[i+1:], arr[i:])
+	arr[i] = val
+
+	return arr
+}
+
+func (this *MasterSector) append(p *Point) {
+
+	//fmt.Println(p.Coord[_x], p.Coord[_y])
+
+	if this.split {
+
+		//reducedX := ((p.Coord[_x] >> uint(32 - this.level - 1)) - this.x) >> this.level
+		//reducedY := ((p.Coord[_y] >> uint(32 - this.level - 1)) - this.y) >> this.level
+
+		reducedX := (p.Coord[_x] - this.x) >> (32 - this.level - 1)
+		reducedY := (p.Coord[_y] - this.y) >> (32 - this.level - 1)
+
+		this.subSectors[reducedX][reducedY].append(p)
+	} else if this.size >= this.splitAt {
+
+		maxUint32 := uint32(4294967295)
+		ranger := uint32(maxUint32 >> uint32(this.level + 1))
+
+	//	fmt.Printf("spawning from {x=%v, y=%v, s=%v} has %v\n", this.x, this.y, uint32(maxUint32 >> uint32(this.level)), this.size)
+
+		for x := uint32(0); x < 2; x++ {
+			for y := uint32(0); y < 2; y++ {
+				this.subSectors[x][y] = &MasterSector{
+					size: 0,
+					splitAt: this.splitAt * 2,
+					level: this.level + 1,
+					width: ranger,
+					x: this.x + (x * ranger),
+					y: this.y + (y * ranger),
+					hX: this.x + (x * ranger) + ranger,
+					lX:this.y + (y * ranger) + ranger,
+					split: false,
+				}
+
+				newSector := this.subSectors[x][y]
+
+				sX, _ := binarySearch(this.points, this.x + ranger)
+
+				if (x == 0) {
+					for xI := uint32(0); xI < sX; xI++ {
+
+						src := this.points[xI].data.([]*Node)
+						loc := &this.points[xI].data
+
+						sY, _ := binarySearch(src, this.y + ranger)
+
+						var buf []*Node
+						if (y == 0) {
+							buf = src[:sY]
+							*loc = src[sY:]
+						} else if (y == 1) {
+							buf = src[sY:]
+							*loc = src[:sY]
+						}
+
+						if buf != nil && len(buf) > 0 {
+							newSector.points = append(newSector.points, &Node{ val: this.points[xI].val, data: make([]*Node, 0) })
+							index := newSector.points[len(newSector.points) - 1].data.([]*Node)
+							newSector.points[len(newSector.points) - 1].data = append(index, buf...)
+
+							newSector.size += len(buf)
+						}
+					}
+				} else {
+					for xI := sX; xI < uint32(len(this.points)); xI++ {
+
+						src := this.points[xI].data.([]*Node)
+						loc := &this.points[xI].data
+
+						sY, _ := binarySearch(src, this.y + ranger)
+
+						var buf []*Node
+						if (y == 0) {
+							buf = src[sY:]
+							*loc = src[:sY]
+						} else if (y == 1) {
+							buf = src[:sY]
+							*loc = src[sY:]
+						}
+
+						if buf != nil && len(buf) > 0 {
+							newSector.points = append(newSector.points, &Node{ val: this.points[xI].val, data: make([]*Node, 0) })
+							index := newSector.points[len(newSector.points) - 1].data.([]*Node)
+							newSector.points[len(newSector.points) - 1].data = append(index, buf...)
+
+							newSector.size += len(buf)
+						}
+					}
+				}
+
+				//fmt.Printf("made {x=%v, y=%v, w=%v} with %v\n", newSector.x, newSector.y, ranger, newSector.size)
+			}
+		}
+
+		//fmt.Printf("\n\n")
+
+		this.points = nil
+		this.split = true
+
+		this.append(p)
+	} else {
+
+		x := p.Coord[_x]
+		y := p.Coord[_y]
+
+		xI := this.points
+
+		xIndex, found := binarySearch(xI, x)
+
+		if found {
+			yI := xI[xIndex].data.([]*Node)
+			yIndex, found := binarySearch(yI, y)
+
+			if (found) {
+				pI := yI[yIndex].data.([]*Point)
+				this.points[xIndex].data.([]*Node)[yIndex].data = append(pI, p)
+			} else {
+				pI := make([]*Point, 1)
+				pI[0] = p
+				this.points[xIndex].data = insertNode(yI, yIndex, &Node{ val: y, data: pI })
+			}
+		} else {
+			pI := make([]*Point, 1)
+			pI[0] = p
+			yI := make([]*Node, 1)
+			yI[0] = &Node{ val: y, data: pI }
+			this.points = insertNode(xI, xIndex, &Node{ val: x, data: yI })
+		}
+
+		this.size++
+	}
+}
+
+func worker(in chan dd, out chan []*Point, wg *sync.WaitGroup) {
+
+	defer wg.Done()
+
+	for data := range in {
+		var points []*Point
+
+		xI := data.master.points
+
+		if (data.master.x >= data.lowerX && (data.master.x + data.master.width) <= data.upperX &&
+			data.master.y >= data.lowerY && (data.master.y + data.master.width) <= data.upperY) {
+			for x := 0; x < len(data.master.points); x++ {
+				for y := 0; y < len(data.master.points[x].data.([]*Node)); y++ {
+					yI := data.master.points[x].data.([]*Node)[y]
+					points = append(points, yI.data.([]*Point)...)
+				}
+			}
+		} else {
+			lowX, _ := binarySearch(xI, data.lowerX)
+			highX, _ := binarySearch(xI, data.upperX)
+
+			for x := lowX; x < highX; x++ {
+				yI := xI[x].data.([]*Node)
+
+				low, _ := binarySearch(yI, data.lowerY)
+				high, _ := binarySearch(yI, data.upperY)
+
+				for y := low; y < high; y++ {
+					points = append(points, yI[y].data.([]*Point)...)
+				}
+			}
+		}
+/*
+		var countt = 0
+		for xx := range data.nodes {
+			xxI := data.nodes[xx].data.([]*Node)
+			for yy := range xxI[xx].data.([]*Node) {
+				yyI := xI[xx].data.([]*Node)
+				countt += len(yyI[yy].data.([]*Point))
+			}
+		}
+		fmt.Println(countt)
+		fmt.Println(len(points))
+*/
+		out <- points
+	}
+}
+
+func overlap(aLow uint32, aHigh uint32, bLow uint32, bHigh uint32) bool {
+	return (aLow >= bLow && aLow <= bHigh) || (bLow >= aLow && bLow <= aHigh) || (aHigh >= bLow && aHigh <= bHigh) || (bHigh >= aLow && bHigh <= aHigh)
+}
+
+func (this *MasterSector) recurFind(lowerX uint32, upperX uint32, lowerY uint32, upperY uint32) []*MasterSector {
+
+	var retSectors []*MasterSector
+
+	if !this.split {
+		retSectors = append(retSectors, this)
+	} else {
+		for x := uint32(0); x < 2; x++ {
+			for y := uint32(0); y < 2; y++ {
+				subSector := this.subSectors[x][y]
+				if (overlap(subSector.x, subSector.hX, lowerX, upperX) && overlap(subSector.y, subSector.hX, lowerY, upperY)) {
+					retSectors = append(retSectors, subSector.recurFind(lowerX, upperX, lowerY, upperY)...)
+				}
+			}
+		}
+	}
+
+	return retSectors
+}
+
+func (this *MasterSector) findInSector(lowerX uint32, upperX uint32, lowerY uint32, upperY uint32) []*Point {
+
+	var wg sync.WaitGroup
+
+	// find all master sectors
+	var masters = this.recurFind(lowerX, upperX, lowerY, upperY)
+
+	fmt.Println(masters)
+
+	out := make(chan dd, 4)
+	in := make(chan []*Point, len(masters))
+	var points []*Point
+
+	for b := 0; b < 4; b++ {
+		wg.Add(1)
+		go worker(out, in, &wg)
+	}
+
+	for i := 0; i < len(masters); i++ {
+		out <- dd {
+			lowerX: lowerX,
+			lowerY: lowerY,
+			upperX: upperX,
+			upperY: upperY,
+			master: masters[i],
+		}
+	}
+
+	close(out)
+
+	wg.Wait()
+	close(in)
+
+	for ps := range in {
+		points = append(points, ps...)
+	}
+
+	zoom := uint32(31)
+	sectors := make(map[uint32]map[uint32]*Sector)
+	for i := range points {
+
+		x := points[i].Coord[_x] >> zoom
+		y := points[i].Coord[_y] >> zoom
+
+		if _, ok :=sectors[x]; !ok {
+			sectors[x] = make(map[uint32]*Sector)
+		}
+
+		if _, ok := sectors[x][y]; !ok {
+			sectors[x][y] = &Sector{
+				x: x,
+				y: y,
+				Count: 0,
+			}
+		}
+
+		sectors[x][y].Count++
+	}
+
+	for x := range sectors {
+		for y := range sectors[x] {
+			fmt.Printf("%v", *sectors[x][y])
+		}
+		fmt.Println()
+	}
+
+	return points
+}
+
+func (this *MasterSector) printSector() {
+	if (this.split) {
+		for x := range this.subSectors {
+			for y := range this.subSectors[x] {
+				this.subSectors[x][y].printSector()
+			}
+		}
+	} else {
+		fmt.Printf("{x=%v, y=%v, s=%v} %v\n", this.x, this.y, "unk", this.size)
+	}
+}
+
+func main() {
+
+	root := &MasterSector{
+		size: 0,
+		splitAt: 4096,
+		split: false,
+		x: 0,
+		y: 0,
+	}
+
+	// inserts
+	start := time.Now()
+	
+	for i := 0; i < 1000000; i++ {
+		root.append(&Point{ [2]uint32{ rand.Uint32(), rand.Uint32() } })
+	}
+
+	fmt.Printf("Insertion time: %s\n", time.Since(start))
+
+	//root.printSector()
+
+/*
+
+	fmt.Println(len(points.points))
+	for i := 0; i < len(points.points); i++ {
+		fmt.Println(len(points.points[i].data.([]*Node)))
+	}
+
+	dataI := points.points[0].data.([]*Node)
+	fmt.Println(len(dataI))
+	for x := 0; x < len(dataI); x++ {
+		dataX := dataI[x].data.([]*Node)
+		for y := 0; y < len(dataX); y++ {
+			dataY := dataX[y].data.([]*Point)
+			for i := 0; i < len(dataY); i++ {
+				fmt.Print(dataY[i])
+			}
+		}
+		fmt.Println()
+	}
+*/
+
+	uintSize := uint32(4294967295)
+
+	// multi-thread
+	start = time.Now()
+	var buf []*Point
+	for i := 0; i < 1; i++ {
+		buf = root.findInSector(uintSize / 16, uintSize / 8, uintSize / 16, uintSize / 8)
+	}
+	fmt.Printf("found: %v\n", len(buf))
+	fmt.Printf("Random Read time: %s\n", time.Since(start))
+}
